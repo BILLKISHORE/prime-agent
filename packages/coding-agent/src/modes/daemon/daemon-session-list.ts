@@ -460,6 +460,13 @@ export function activeActivityForSession(activeSession: ActiveSessionState): Ses
 	if (activeSession.runtime.metadata?.kind === "subagent") {
 		return "idle";
 	}
+	// The summarizer returns early on an empty session, so this one never gets a
+	// verdict either: without an exit here the hold below pins a session whose
+	// client left before the first message at "working" for the life of the
+	// daemon. No messages means no turn ever ran, so idle is the honest answer.
+	if (activeSession.runtime.session.messages.length === 0) {
+		return "idle";
+	}
 	// Hold at "working" until the idle verdict is current, so the view never
 	// buckets an unlabeled idle session.
 	return isSummaryCurrent(activeSession) ? "idle" : "working";
