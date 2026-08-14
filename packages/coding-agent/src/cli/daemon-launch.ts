@@ -66,8 +66,20 @@ type DaemonVersionProbe =
 	| { status: "current"; hello: DaemonHello }
 	| { status: "stale"; hello?: DaemonHello };
 
+/**
+ * Handshake budgets for a daemon that already accepted the connection. A daemon
+ * saturating its event loop can be slow to greet, and treating that as stale
+ * sends the client down the replacement path against a healthy daemon. A peer
+ * that dropped the connection fails the next attempt immediately, so retrying
+ * only costs time for a peer that is holding the socket open.
+ */
+export const DAEMON_HELLO_PROBE_TIMEOUTS_MS: readonly number[] = [2000, 4000];
+
 /** Connect to a running daemon and check whether it matches this client's protocol and app version. */
-export async function probeDaemonVersion(socketPath: string): Promise<DaemonVersionProbe> {
+export async function probeDaemonVersion(
+	socketPath: string,
+	helloTimeoutsMs: readonly number[] = DAEMON_HELLO_PROBE_TIMEOUTS_MS,
+): Promise<DaemonVersionProbe> {
 	let client: DaemonClient | undefined;
 	for (const timeoutMs of [250, 2000]) {
 		const candidate = new DaemonClient(socketPath);
@@ -83,7 +95,23 @@ export async function probeDaemonVersion(socketPath: string): Promise<DaemonVers
 		return { status: "absent" };
 	}
 	try {
-		const hello = await client.waitForHello(2000);
+		let hello: DaemonHello | undefined;
+		for (const timeoutMs of helloTimeoutsMs) {
+			try {
+				hello = await client.waitForHello(timeoutMs);
+				break;
+			} catch {
+				// Slow or gone; the next attempt tells them apart.
+			}
+		}
+		if (!hello) {
+			// Silent across every attempt: assume a stale daemon.
+			const budgetMs = helloTimeoutsMs.reduce((total, timeoutMs) => total + timeoutMs, 0);
+			logDaemonLaunch(
+				`running daemon on ${socketPath} sent no recognizable hello within ${budgetMs}ms; treating as stale`,
+			);
+			return { status: "stale" };
+		}
 		const current =
 			hello.protocol.version === DAEMON_PROTOCOL_VERSION &&
 			hello.schemaId === DAEMON_SCHEMA_ID &&
@@ -94,15 +122,9 @@ export async function probeDaemonVersion(socketPath: string): Promise<DaemonVers
 					`/schema ${hello.schemaId ?? "legacy"}/build ${hello.runtime?.buildId ?? "unknown"} vs client ` +
 					`v${VERSION}/proto${DAEMON_PROTOCOL_VERSION}/schema ${DAEMON_SCHEMA_ID}/build ${getDaemonRuntimeIdentity().buildId}`,
 			);
+			return { status: "stale", hello };
 		}
-		if (current) {
-			return { status: "current", hello };
-		}
-		return { status: "stale", hello };
-	} catch {
-		// Connected but no recognizable greeting: assume a stale daemon.
-		logDaemonLaunch(`running daemon on ${socketPath} sent no recognizable hello; treating as stale`);
-		return { status: "stale" };
+		return { status: "current", hello };
 	} finally {
 		client.close();
 	}
