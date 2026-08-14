@@ -1824,18 +1824,33 @@ export class AgentSession {
 		}
 	}
 
-	private _finishGoalWithError(errorMessage: string): void {
+	private _finishGoalWithError(errorMessage: string, options: { transient?: boolean } = {}): void {
 		if (!this._goalState.objective || this._goalState.status !== "active") {
 			return;
 		}
 		const goal = this._goalWithAccountedWallClock();
+		// Only a permanent failure ends the goal. `error` is not resumable (see the
+		// resume gate, which admits only `paused` and `budget_limited`), so parking a
+		// goal there after a run of overload errors strands autonomy until someone
+		// creates a new goal by hand. Transient exhaustion pauses instead, which is how
+		// budget exhaustion already behaves.
+		const status: GoalStatus = options.transient ? "paused" : "error";
 		this._setGoalState({
 			...goal,
 			active: false,
-			status: "error",
+			status,
 			lastReason: errorMessage,
 			lastError: errorMessage,
 		});
+	}
+
+	/**
+	 * A terminal assistant error is permanent only when the provider said so. The session
+	 * already draws this line for retries: auth, invalid_request and refusal are permanent,
+	 * everything else (overloaded, rate limits, transport) is transient.
+	 */
+	private _isTransientGoalFailure(message: AssistantMessage): boolean {
+		return !this._isStructuredPermanentProviderFailure(message);
 	}
 
 	private _finishGoalForTerminalAssistantMessage(message: AssistantMessage): void {
@@ -1853,7 +1868,9 @@ export class AgentSession {
 				this._goalAbortInProgress = false;
 				return;
 			}
-			this._finishGoalWithError(message.errorMessage || "Assistant response failed");
+			this._finishGoalWithError(message.errorMessage || "Assistant response failed", {
+				transient: this._isTransientGoalFailure(message),
+			});
 		}
 	}
 
