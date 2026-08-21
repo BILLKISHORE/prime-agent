@@ -1,0 +1,1 @@
+- Fixed a busy daemon being treated as stale when it was slow to answer the hello handshake, which left the client stuck on the loading screen; the handshake is now retried before the daemon is replaced.
