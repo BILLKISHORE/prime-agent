@@ -1,0 +1,1 @@
+- Fixed sessions whose client disconnected before the first message reporting `working` indefinitely in `prime-agent list`; a session with no messages is now reported as idle.
