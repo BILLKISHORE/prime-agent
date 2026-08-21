@@ -1,0 +1,1 @@
+- Fixed a persistent goal being permanently deactivated after a run of transient provider errors; transient exhaustion now pauses the goal so it stays resumable, while a permanent failure still ends it.
